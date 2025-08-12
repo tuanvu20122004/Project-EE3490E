@@ -1,0 +1,14 @@
+C:\Users\Telemetry 04\source\repos\testC#\testC#\bin\Debug\net9.0\testC#.exe
+C:\Users\Telemetry 04\source\repos\testC#\testC#\bin\Debug\net9.0\testC#.deps.json
+C:\Users\Telemetry 04\source\repos\testC#\testC#\bin\Debug\net9.0\testC#.runtimeconfig.json
+C:\Users\Telemetry 04\source\repos\testC#\testC#\bin\Debug\net9.0\testC#.dll
+C:\Users\Telemetry 04\source\repos\testC#\testC#\bin\Debug\net9.0\testC#.pdb
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.AssemblyInfoInputs.cache
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.AssemblyInfo.cs
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.csproj.CoreCompileInputs.cache
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.dll
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\refint\testC#.dll
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.pdb
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\testC#.genruntimeconfig.cache
+C:\Users\Telemetry 04\source\repos\testC#\testC#\obj\Debug\net9.0\ref\testC#.dll

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Net.Sockets;
 using System.Net;
@@ -9,11 +9,11 @@ namespace UDPForward
 {
     public class Program
     {
-        [STAThread]  
+        [STAThread]
         public static void Main(string[] args)
         {
-            
-            Sender sender = new Sender(block: BLOCK.BLOCK_5E, frequency1: 500, frequency2: 200);  
+
+            Sender sender = new Sender(block: BLOCK.BLOCK_5E, frequency1: 500, frequency2: 200);
             CancellationTokenSource cts = new CancellationTokenSource();
 
             // Khởi động gửi dữ liệu trong hai thread riêng biệt
@@ -43,44 +43,57 @@ namespace UDPForward
     // Cập nhật lớp Sender nếu cần (giữ nguyên như đã chỉnh sửa trước đó)
     public class Sender
     {
-        private const int LENGTH_DATA = 32; // Số byte dữ liệu chính cần gửi
+        private Socket socket1;  // Port 20015 (500Hz)
+        private Socket socket2;  // Port 20012 (200Hz)
 
-        private Socket socket1;  // Socket cho port 20015 (500Hz)
-        private Socket socket2;  // Socket cho port 20012 (200Hz)
-        private int frequencyHz1;  // Tần số gửi cho port 20015
-        private int frequencyHz2;  // Tần số gửi cho port 20012
-        private byte[] dataToSend;
+        private readonly int frequencyHz1;   // 500
+        private readonly int frequencyHz2;   // 200
+
+        // Kích thước gói riêng cho từng cổng
+        private readonly int length20015;    // 184 bytes
+        private readonly int length20012;    // 70 bytes
+
+        private readonly byte[] data20015;   // buffer cho 20015
+        private readonly byte[] data20012;   // buffer cho 20012
+
         private long ticksPerInterval1;
         private long ticksPerInterval2;
-        private bool isRunning;
-        private BLOCK block;
+        private volatile bool isRunning;
+        private readonly BLOCK block;
 
-        public Sender(BLOCK block = BLOCK.BLOCK_5E, int frequency1 = 500, int frequency2 = 200)
+        public Sender(BLOCK block = BLOCK.BLOCK_5E, int frequency1 = 500, int frequency2 = 200,
+                      int lengthFor20015 = 184, int lengthFor20012 = 70)
         {
             frequencyHz1 = frequency1;
             frequencyHz2 = frequency2;
 
-            // Tính toán ticks per interval cho độ chính xác cao
+            // Tính tick/chu kỳ (độ chính xác cao)
             QueryPerformanceFrequency(out long freq);
             ticksPerInterval1 = freq / frequencyHz1;
             ticksPerInterval2 = freq / frequencyHz2;
 
             this.block = block;
-            dataToSend = new byte[LENGTH_DATA];
 
-            for (int i = 0; i < LENGTH_DATA; i++)
-            {
-                dataToSend[i] = (byte)(i % 256);  // Dữ liệu gửi (ví dụ các giá trị byte 0-255)
-            }
+            length20015 = lengthFor20015;
+            length20012 = lengthFor20012;
 
-            // Khởi tạo UDP socket cho port 20015 (500Hz)
+            data20015 = new byte[length20015];
+            data20012 = new byte[length20012];
+
+            // Fill dữ liệu mẫu (có thể thay bằng nội dung thật)
+            for (int i = 0; i < data20015.Length; i++)
+                data20015[i] = (byte)(i & 0xFF);
+
+            for (int i = 0; i < data20012.Length; i++)
+                data20012[i] = (byte)(i & 0xFF);
+
+            // Khởi tạo UDP socket (sender)
             socket1 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             socket1.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 64);
             socket1.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, 1024 * 1024);
             var multicastOption1 = new MulticastOption(IPAddress.Parse("224.1.1.2"), IPAddress.Any);
             socket1.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, multicastOption1);
 
-            // Khởi tạo UDP socket cho port 20012 (200Hz)
             socket2 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             socket2.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 64);
             socket2.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, 1024 * 1024);
@@ -93,47 +106,40 @@ namespace UDPForward
 
         public void StartSending5ePort20015(CancellationToken cancellationToken = default)
         {
-            // Thread gửi dữ liệu cho port 20015 với tần số 500Hz
             isRunning = true;
-
-            // Cài đặt độ ưu tiên thread để có độ chính xác tốt hơn
             Thread.CurrentThread.Priority = ThreadPriority.Highest;
 
             Console.WriteLine($"Starting send data at {frequencyHz1}Hz (Port 20015)");
-            Console.WriteLine($"Sending {dataToSend.Length} bytes per packet to {block} on port 20015");
+            Console.WriteLine($"Sending {data20015.Length} bytes per packet to {block} on port 20015");
 
             uint packetCount1 = 0;
             long startTicks = HighPrecisionTimer.GetTicks();
-
             var statsTimer = Stopwatch.StartNew();
             uint lastStatsPacketCount1 = 0;
 
             long nextSendTime1 = HighPrecisionTimer.GetTicks() + ticksPerInterval1;
-
             EndPoint endPoint1 = new IPEndPoint(IPAddress.Parse("224.1.1.2"), 20015);
 
             while (isRunning && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    dataToSend[0] = (byte)((packetCount1 >> 24) & 0xFF);
-                    dataToSend[1] = (byte)((packetCount1 >> 16) & 0xFF);
-                    dataToSend[2] = (byte)((packetCount1 >> 8) & 0xFF);
-                    dataToSend[3] = (byte)((packetCount1 >> 0) & 0xFF);
-                    // Gửi gói dữ liệu qua UDP cho port 20015
-                    socket1.SendTo(dataToSend, endPoint1);
+                    // nhúng packet counter vào 4 byte đầu (nếu cần)
+                    data20015[0] = (byte)((packetCount1 >> 24) & 0xFF);
+                    data20015[1] = (byte)((packetCount1 >> 16) & 0xFF);
+                    data20015[2] = (byte)((packetCount1 >> 8) & 0xFF);
+                    data20015[3] = (byte)((packetCount1 >> 0) & 0xFF);
+
+                    socket1.SendTo(data20015, endPoint1);
                     packetCount1++;
 
-                    // Chờ cho đến khi đến thời điểm gửi tiếp theo
                     HighPrecisionTimer.SpinWaitUntil(nextSendTime1);
                     nextSendTime1 += ticksPerInterval1;
 
-                    // Thống kê số gói gửi mỗi giây
                     if (statsTimer.ElapsedMilliseconds >= 1000)
                     {
                         uint packetsThisSecond1 = packetCount1 - lastStatsPacketCount1;
                         double actualFreq1 = packetsThisSecond1 / (statsTimer.ElapsedMilliseconds / 1000.0);
-
                         double totalElapsed = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
                         double avgFreq1 = packetCount1 / totalElapsed;
 
@@ -149,7 +155,6 @@ namespace UDPForward
                 }
             }
 
-            // In ra tổng số gói gửi đi và tần số trung bình cho port 20015
             double totalTime1 = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
             double avgAllFreq1 = packetCount1 / totalTime1;
             Console.WriteLine($"Sender stopped for port 20015. Total: {packetCount1} packets in {totalTime1:F2}s, Avg freq: {avgAllFreq1:F2}Hz");
@@ -157,47 +162,40 @@ namespace UDPForward
 
         public void StartSending5ePort20012(CancellationToken cancellationToken = default)
         {
-            // Thread gửi dữ liệu cho port 20012 với tần số 200Hz
             isRunning = true;
-
-            // Cài đặt độ ưu tiên thread để có độ chính xác tốt hơn
             Thread.CurrentThread.Priority = ThreadPriority.Highest;
 
             Console.WriteLine($"Starting send data at {frequencyHz2}Hz (Port 20012)");
-            Console.WriteLine($"Sending {dataToSend.Length} bytes per packet to {block} on port 20012");
+            Console.WriteLine($"Sending {data20012.Length} bytes per packet to {block} on port 20012");
 
             uint packetCount2 = 0;
             long startTicks = HighPrecisionTimer.GetTicks();
-
             var statsTimer = Stopwatch.StartNew();
             uint lastStatsPacketCount2 = 0;
 
             long nextSendTime2 = HighPrecisionTimer.GetTicks() + ticksPerInterval2;
-
             EndPoint endPoint2 = new IPEndPoint(IPAddress.Parse("224.1.1.2"), 20012);
 
             while (isRunning && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    dataToSend[0] = (byte)((packetCount2 >> 24) & 0xFF);
-                    dataToSend[1] = (byte)((packetCount2 >> 16) & 0xFF);
-                    dataToSend[2] = (byte)((packetCount2 >> 8) & 0xFF);
-                    dataToSend[3] = (byte)((packetCount2 >> 0) & 0xFF);
-                    // Gửi gói dữ liệu qua UDP cho port 20012
-                    socket2.SendTo(dataToSend, endPoint2);
+                    // nhúng packet counter vào 4 byte đầu (nếu cần)
+                    data20012[0] = (byte)((packetCount2 >> 24) & 0xFF);
+                    data20012[1] = (byte)((packetCount2 >> 16) & 0xFF);
+                    data20012[2] = (byte)((packetCount2 >> 8) & 0xFF);
+                    data20012[3] = (byte)((packetCount2 >> 0) & 0xFF);
+
+                    socket2.SendTo(data20012, endPoint2);
                     packetCount2++;
 
-                    // Chờ cho đến khi đến thời điểm gửi tiếp theo
                     HighPrecisionTimer.SpinWaitUntil(nextSendTime2);
                     nextSendTime2 += ticksPerInterval2;
 
-                    // Thống kê số gói gửi mỗi giây
                     if (statsTimer.ElapsedMilliseconds >= 1000)
                     {
                         uint packetsThisSecond2 = packetCount2 - lastStatsPacketCount2;
                         double actualFreq2 = packetsThisSecond2 / (statsTimer.ElapsedMilliseconds / 1000.0);
-
                         double totalElapsed = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
                         double avgFreq2 = packetCount2 / totalElapsed;
 
@@ -213,16 +211,12 @@ namespace UDPForward
                 }
             }
 
-            // In ra tổng số gói gửi đi và tần số trung bình cho port 20012
             double totalTime2 = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
             double avgAllFreq2 = packetCount2 / totalTime2;
             Console.WriteLine($"Sender stopped for port 20012. Total: {packetCount2} packets in {totalTime2:F2}s, Avg freq: {avgAllFreq2:F2}Hz");
         }
 
-        public void Stop()
-        {
-            isRunning = false;
-        }
+        public void Stop() => isRunning = false;
 
         public void Dispose()
         {
@@ -232,6 +226,7 @@ namespace UDPForward
             socket2?.Dispose();
         }
     }
+
 
     public enum BLOCK
     {

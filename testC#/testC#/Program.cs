@@ -12,27 +12,22 @@ namespace UDPForward
         [STAThread]
         public static void Main(string[] args)
         {
-
             Sender sender = new Sender(block: BLOCK.BLOCK_5E, frequency1: 500, frequency2: 200);
             CancellationTokenSource cts = new CancellationTokenSource();
 
-            // Khởi động gửi dữ liệu trong hai thread riêng biệt
-            Thread senderThread1 = new Thread(() => sender.StartSending5ePort20015(cts.Token)); // 500Hz for port 20015
-            Thread senderThread2 = new Thread(() => sender.StartSending5ePort20012(cts.Token)); // 200Hz for port 20012
+            Thread senderThread1 = new Thread(() => sender.StartSending5ePort20015(cts.Token)); // 500Hz -> 5E
+            Thread senderThread2 = new Thread(() => sender.StartSending5ePort20012(cts.Token)); // 200Hz -> Tele
 
             senderThread1.Start();
             senderThread2.Start();
 
-            // Chờ người dùng nhấn phím để dừng chương trình
             Console.WriteLine("Press any key to stop...");
             Console.ReadKey();
 
-            // Dừng việc gửi khi người dùng nhấn phím
             cts.Cancel();
             sender.Stop();
             sender.Dispose();
 
-            // Đợi thread gửi dữ liệu kết thúc
             senderThread1.Join();
             senderThread2.Join();
 
@@ -40,80 +35,78 @@ namespace UDPForward
         }
     }
 
-    // Cập nhật lớp Sender nếu cần (giữ nguyên như đã chỉnh sửa trước đó)
     public class Sender
     {
-        private Socket socket1;  // Port 20015 (500Hz)
-        private Socket socket2;  // Port 20012 (200Hz)
+        private const int LENGTH_DATA_20015 = 184; // 5E
+        private const int LENGTH_DATA_20012 = 70;  // Tele
 
-        private readonly int frequencyHz1;   // 500
-        private readonly int frequencyHz2;   // 200
-
-        // Kích thước gói riêng cho từng cổng
-        private readonly int length20015;    // 184 bytes
-        private readonly int length20012;    // 70 bytes
-
-        private readonly byte[] data20015;   // buffer cho 20015
-        private readonly byte[] data20012;   // buffer cho 20012
-
+        private Socket socket1;  // 5E -> 20015
+        private Socket socket2;  // Tele -> 20012
+        private int frequencyHz1;
+        private int frequencyHz2;
+        private byte[] dataToSend1; // 5E buffer
+        private byte[] dataToSend2; // Tele buffer
         private long ticksPerInterval1;
         private long ticksPerInterval2;
-        private volatile bool isRunning;
-        private readonly BLOCK block;
+        private bool isRunning;
+        private BLOCK block;
 
-        public Sender(BLOCK block = BLOCK.BLOCK_5E, int frequency1 = 500, int frequency2 = 200,
-                      int lengthFor20015 = 184, int lengthFor20012 = 70)
+        public Sender(BLOCK block = BLOCK.BLOCK_5E, int frequency1 = 500, int frequency2 = 200)
         {
             frequencyHz1 = frequency1;
             frequencyHz2 = frequency2;
 
-            // Tính tick/chu kỳ (độ chính xác cao)
             QueryPerformanceFrequency(out long freq);
             ticksPerInterval1 = freq / frequencyHz1;
             ticksPerInterval2 = freq / frequencyHz2;
 
             this.block = block;
 
-            length20015 = lengthFor20015;
-            length20012 = lengthFor20012;
+            // --- Init buffers with proper headers/tailers ---
+            dataToSend1 = new byte[LENGTH_DATA_20015]; // 5E
+            dataToSend1[0] = 0xAB;
+            dataToSend1[1] = 0xCD;
+            dataToSend1[2] = 0xEF;
+            // Tailer E1 E2 E3 placed at LENGTH-5 .. LENGTH-3
+            dataToSend1[LENGTH_DATA_20015 - 5] = 0xE1;
+            dataToSend1[LENGTH_DATA_20015 - 4] = 0xE2;
+            dataToSend1[LENGTH_DATA_20015 - 3] = 0xE3;
+            // Last 2 bytes are CRC16-1021 (set during send)
 
-            data20015 = new byte[length20015];
-            data20012 = new byte[length20012];
+            dataToSend2 = new byte[LENGTH_DATA_20012]; // Tele
+            dataToSend2[0] = 0xAF;                     // Header
+            dataToSend2[LENGTH_DATA_20012 - 3] = 0xFA; // Tailer at byte 67
+            // Last 2 bytes are CRC16-8005 (set during send)
 
-            // Fill dữ liệu mẫu (có thể thay bằng nội dung thật)
-            for (int i = 0; i < data20015.Length; i++)
-                data20015[i] = (byte)(i & 0xFF);
-
-            for (int i = 0; i < data20012.Length; i++)
-                data20012[i] = (byte)(i & 0xFF);
-
-            // Khởi tạo UDP socket (sender)
+            // --- Sockets ---
             socket1 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             socket1.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 64);
             socket1.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, 1024 * 1024);
-            var multicastOption1 = new MulticastOption(IPAddress.Parse("224.1.1.2"), IPAddress.Any);
-            socket1.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, multicastOption1);
+            socket1.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
+                new MulticastOption(IPAddress.Parse("224.1.1.2"), IPAddress.Any));
 
             socket2 = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             socket2.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.MulticastTimeToLive, 64);
             socket2.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.SendBuffer, 1024 * 1024);
-            var multicastOption2 = new MulticastOption(IPAddress.Parse("224.1.1.2"), IPAddress.Any);
-            socket2.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership, multicastOption2);
+            socket2.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
+                new MulticastOption(IPAddress.Parse("224.1.1.2"), IPAddress.Any));
         }
 
         [DllImport("kernel32.dll")]
         private static extern bool QueryPerformanceFrequency(out long lpFreq);
 
+        // ------------------- Port 20015: 5E (184B) -------------------
         public void StartSending5ePort20015(CancellationToken cancellationToken = default)
         {
             isRunning = true;
             Thread.CurrentThread.Priority = ThreadPriority.Highest;
 
-            Console.WriteLine($"Starting send data at {frequencyHz1}Hz (Port 20015)");
-            Console.WriteLine($"Sending {data20015.Length} bytes per packet to {block} on port 20015");
+            Console.WriteLine($"Starting send data at {frequencyHz1}Hz (Port 20015, 5E)");
+            Console.WriteLine($"Sending {dataToSend1.Length} bytes per packet");
 
             uint packetCount1 = 0;
             long startTicks = HighPrecisionTimer.GetTicks();
+
             var statsTimer = Stopwatch.StartNew();
             uint lastStatsPacketCount1 = 0;
 
@@ -124,13 +117,17 @@ namespace UDPForward
             {
                 try
                 {
-                    // nhúng packet counter vào 4 byte đầu (nếu cần)
-                    data20015[0] = (byte)((packetCount1 >> 24) & 0xFF);
-                    data20015[1] = (byte)((packetCount1 >> 16) & 0xFF);
-                    data20015[2] = (byte)((packetCount1 >> 8) & 0xFF);
-                    data20015[3] = (byte)((packetCount1 >> 0) & 0xFF);
+                    // 18-bit counter spread across bytes [3],[4],[5]
+                    dataToSend1[3] = (byte)((packetCount1 >> 10) & 0xFF);
+                    dataToSend1[4] = (byte)((packetCount1 >> 2) & 0xFF);
+                    dataToSend1[5] = (byte)(((packetCount1 & 0x03) << 6) & 0xC0);
 
-                    socket1.SendTo(data20015, endPoint1);
+                    // CRC16-1021 over all bytes except the last 2 CRC bytes
+                    ushort crc = CalculateCrc16_1021(dataToSend1, LENGTH_DATA_20015 - 2);
+                    dataToSend1[LENGTH_DATA_20015 - 2] = (byte)((crc >> 8) & 0xFF);
+                    dataToSend1[LENGTH_DATA_20015 - 1] = (byte)(crc & 0xFF);
+
+                    socket1.SendTo(dataToSend1, endPoint1);
                     packetCount1++;
 
                     HighPrecisionTimer.SpinWaitUntil(nextSendTime1);
@@ -143,7 +140,7 @@ namespace UDPForward
                         double totalElapsed = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
                         double avgFreq1 = packetCount1 / totalElapsed;
 
-                        Console.WriteLine($"Sent {block}: {packetCount1} total to 20015, Current: {actualFreq1:F1}Hz, Average: {avgFreq1:F2}Hz");
+                        Console.WriteLine($"5E -> 20015: {packetCount1} total, Current: {actualFreq1:F1}Hz, Average: {avgFreq1:F2}Hz");
 
                         lastStatsPacketCount1 = packetCount1;
                         statsTimer.Restart();
@@ -160,16 +157,18 @@ namespace UDPForward
             Console.WriteLine($"Sender stopped for port 20015. Total: {packetCount1} packets in {totalTime1:F2}s, Avg freq: {avgAllFreq1:F2}Hz");
         }
 
+        // ------------------- Port 20012: Tele (70B) -------------------
         public void StartSending5ePort20012(CancellationToken cancellationToken = default)
         {
             isRunning = true;
             Thread.CurrentThread.Priority = ThreadPriority.Highest;
 
-            Console.WriteLine($"Starting send data at {frequencyHz2}Hz (Port 20012)");
-            Console.WriteLine($"Sending {data20012.Length} bytes per packet to {block} on port 20012");
+            Console.WriteLine($"Starting send data at {frequencyHz2}Hz (Port 20012, Tele)");
+            Console.WriteLine($"Sending {dataToSend2.Length} bytes per packet");
 
             uint packetCount2 = 0;
             long startTicks = HighPrecisionTimer.GetTicks();
+
             var statsTimer = Stopwatch.StartNew();
             uint lastStatsPacketCount2 = 0;
 
@@ -180,13 +179,20 @@ namespace UDPForward
             {
                 try
                 {
-                    // nhúng packet counter vào 4 byte đầu (nếu cần)
-                    data20012[0] = (byte)((packetCount2 >> 24) & 0xFF);
-                    data20012[1] = (byte)((packetCount2 >> 16) & 0xFF);
-                    data20012[2] = (byte)((packetCount2 >> 8) & 0xFF);
-                    data20012[3] = (byte)((packetCount2 >> 0) & 0xFF);
+                    // 24-bit counter big-endian into bytes [1..3]
+                    dataToSend2[1] = (byte)((packetCount2 >> 16) & 0xFF);
+                    dataToSend2[2] = (byte)((packetCount2 >> 8) & 0xFF);
+                    dataToSend2[3] = (byte)(packetCount2 & 0xFF);
 
-                    socket2.SendTo(data20012, endPoint2);
+                    // Make sure tailer is present at byte 67
+                    dataToSend2[LENGTH_DATA_20012 - 3] = 0xFA;
+
+                    // CRC16-8005 over bytes [0..67], write to [68..69] big-endian
+                    ushort crc = CalculateCrc16_8005(dataToSend2, LENGTH_DATA_20012 - 2);
+                    dataToSend2[LENGTH_DATA_20012 - 2] = (byte)((crc >> 8) & 0xFF);
+                    dataToSend2[LENGTH_DATA_20012 - 1] = (byte)(crc & 0xFF);
+
+                    socket2.SendTo(dataToSend2, endPoint2);
                     packetCount2++;
 
                     HighPrecisionTimer.SpinWaitUntil(nextSendTime2);
@@ -199,7 +205,7 @@ namespace UDPForward
                         double totalElapsed = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
                         double avgFreq2 = packetCount2 / totalElapsed;
 
-                        Console.WriteLine($"Sent {block}: {packetCount2} total to 20012, Current: {actualFreq2:F1}Hz, Average: {avgFreq2:F2}Hz");
+                        Console.WriteLine($"Tele -> 20012: {packetCount2} total, Current: {actualFreq2:F1}Hz, Average: {avgFreq2:F2}Hz");
 
                         lastStatsPacketCount2 = packetCount2;
                         statsTimer.Restart();
@@ -225,8 +231,48 @@ namespace UDPForward
             socket2?.Close();
             socket2?.Dispose();
         }
-    }
 
+        // ------------------- CRC helpers -------------------
+        // CRC16-1021 (poly 0x1021), init 0xFFFF, no reflect, no xorout
+        private static ushort CalculateCrc16_1021(byte[] data, int lengthWithoutCrc)
+        {
+            const ushort poly = 0x1021;
+            ushort crc = 0xFFFF;
+
+            for (int i = 0; i < lengthWithoutCrc; i++)
+            {
+                crc ^= (ushort)(data[i] << 8);
+                for (int b = 0; b < 8; b++)
+                {
+                    if ((crc & 0x8000) != 0)
+                        crc = (ushort)((crc << 1) ^ poly);
+                    else
+                        crc <<= 1;
+                }
+            }
+            return crc;
+        }
+
+        // CRC16-8005 (poly 0x8005), init 0x0000, no reflect, no xorout
+        private static ushort CalculateCrc16_8005(byte[] data, int lengthWithoutCrc)
+        {
+            const ushort poly = 0x8005;
+            ushort crc = 0x0000;
+
+            for (int i = 0; i < lengthWithoutCrc; i++)
+            {
+                crc ^= (ushort)(data[i] << 8);
+                for (int b = 0; b < 8; b++)
+                {
+                    if ((crc & 0x8000) != 0)
+                        crc = (ushort)((crc << 1) ^ poly);
+                    else
+                        crc <<= 1;
+                }
+            }
+            return crc;
+        }
+    }
 
     public enum BLOCK
     {

@@ -221,7 +221,6 @@ namespace UDPForward
             double avgAllFreq2 = packetCount2 / totalTime2;
             Console.WriteLine($"Sender stopped for port 20012. Total: {packetCount2} packets in {totalTime2:F2}s, Avg freq: {avgAllFreq2:F2}Hz");
         }
-
         public void Stop() => isRunning = false;
 
         public void Dispose()

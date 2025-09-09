@@ -32,6 +32,7 @@ namespace UDPForward
             senderThread2.Join();
 
             Console.WriteLine("Program stopped.");
+            Console.WriteLine($"Total packets sent: {sender.PacketCount1 + sender.PacketCount2}");
         }
     }
 
@@ -39,6 +40,9 @@ namespace UDPForward
     {
         private const int LENGTH_DATA_20015 = 184; // 5E
         private const int LENGTH_DATA_20012 = 70;  // Tele
+
+        public uint PacketCount1 { get; private set; }
+        public uint PacketCount2 { get; private set; }
 
         private Socket socket1;  // 5E -> 20015
         private Socket socket2;  // Tele -> 20012
@@ -121,7 +125,7 @@ namespace UDPForward
                     dataToSend1[3] = (byte)((packetCount1 >> 10) & 0xFF);
                     dataToSend1[4] = (byte)((packetCount1 >> 2) & 0xFF);
                     dataToSend1[5] = (byte)(((packetCount1 & 0x03) << 6) & 0xC0);
-
+      
                     // CRC16-1021 over all bytes except the last 2 CRC bytes
                     ushort crc = CalculateCrc16_1021(dataToSend1, LENGTH_DATA_20015 - 2);
                     dataToSend1[LENGTH_DATA_20015 - 2] = (byte)((crc >> 8) & 0xFF);
@@ -151,7 +155,7 @@ namespace UDPForward
                     Console.WriteLine($"Exception sending to 20015: {ex.Message}");
                 }
             }
-
+            PacketCount1 = packetCount1;
             double totalTime1 = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
             double avgAllFreq1 = packetCount1 / totalTime1;
             Console.WriteLine($"Sender stopped for port 20015. Total: {packetCount1} packets in {totalTime1:F2}s, Avg freq: {avgAllFreq1:F2}Hz");
@@ -183,7 +187,7 @@ namespace UDPForward
                     dataToSend2[1] = (byte)((packetCount2 >> 16) & 0xFF);
                     dataToSend2[2] = (byte)((packetCount2 >> 8) & 0xFF);
                     dataToSend2[3] = (byte)(packetCount2 & 0xFF);
-
+                    
                     // Make sure tailer is present at byte 67
                     dataToSend2[LENGTH_DATA_20012 - 3] = 0xFA;
 
@@ -216,7 +220,7 @@ namespace UDPForward
                     Console.WriteLine($"Exception sending to 20012: {ex.Message}");
                 }
             }
-
+            PacketCount2 = packetCount2;
             double totalTime2 = HighPrecisionTimer.GetElapsedMilliseconds(startTicks) / 1000.0;
             double avgAllFreq2 = packetCount2 / totalTime2;
             Console.WriteLine($"Sender stopped for port 20012. Total: {packetCount2} packets in {totalTime2:F2}s, Avg freq: {avgAllFreq2:F2}Hz");
